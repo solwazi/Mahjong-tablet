@@ -73,9 +73,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2.1rem; /* Increased font size for better readability */
+            font-size: 2.1rem; 
             font-weight: bold;
-            color: #0f172a; /* Dark text for high contrast on bright colors */
+            color: #0f172a; 
             box-shadow: 0 4px 0 rgba(0,0,0,0.25), 0 6px 10px rgba(0,0,0,0.2);
             transition: transform 0.15s ease-in-out;
             position: relative;
@@ -135,20 +135,10 @@
         
         const SYMBOLS = ['🀀', '🀁', '🀂', '🀃', '🀄', '🀅', '🀆', '🀇', '🀏', '🀕', '🀟', '🀤'];
         
-        // High-contrast, vibrant palette mapped directly to each symbol index
         const COLOR_PALETTE = [
-            '#f87171', // Red
-            '#fb923c', // Orange
-            '#fbbf24', // Yellow
-            '#fde047', // Light Yellow
-            '#a3e635', // Lime
-            '#4ade80', // Green
-            '#2dd4bf', // Teal
-            '#38bdf8', // Sky Blue
-            '#60a5fa', // Blue
-            '#818cf8', // Indigo
-            '#c084fc', // Purple
-            '#f472b6'  // Pink
+            '#f87171', '#fb923c', '#fbbf24', '#fde047', 
+            '#a3e635', '#4ade80', '#2dd4bf', '#38bdf8', 
+            '#60a5fa', '#818cf8', '#c084fc', '#f472b6'
         ];
 
         let grid = [];
@@ -160,7 +150,6 @@
             
             let deck = [];
             SYMBOLS.forEach((sym, idx) => {
-                // Store both the symbol text and its assigned color ID
                 deck.push({ text: sym, color: COLOR_PALETTE[idx] }); 
                 deck.push({ text: sym, color: COLOR_PALETTE[idx] }); 
             });
@@ -190,7 +179,7 @@
                     remaining++;
                     tileDiv.className = 'tile';
                     tileDiv.textContent = tileData.text;
-                    tileDiv.style.background = tileData.color; // Apply the unique color
+                    tileDiv.style.background = tileData.color;
                     
                     tileDiv.addEventListener('touchstart', (e) => handleTouchStart(e), { passive: true });
                     tileDiv.addEventListener('touchend', (e) => handleTouchEnd(e, index), { passive: true });
@@ -220,23 +209,21 @@
                 return; 
             }
 
-            let row = Math.floor(index / GRID_SIZE);
-            let col = index % GRID_SIZE;
-
             const boardSnapshot = grid.map(item => item ? { ...item } : null);
+            let moved = false;
 
-            let shifted = false;
             if (Math.abs(deltaX) > Math.abs(deltaY)) {
-                if (deltaX > 0) shifted = shiftRow(row, 'right');
-                else shifted = shiftRow(row, 'left');
+                // Horizontal Swipe
+                const direction = deltaX > 0 ? 1 : -1;
+                moved = processPartialSlide(index, direction, 'horizontal');
             } else {
-                if (deltaY > 0) shifted = shiftColumn(col, 'down');
-                else shifted = shiftColumn(col, 'up');
+                // Vertical Swipe
+                const direction = deltaY > 0 ? GRID_SIZE : -GRID_SIZE;
+                moved = processPartialSlide(index, direction, 'vertical');
             }
 
-            if (shifted) {
+            if (moved) {
                 renderBoard();
-                
                 let hasMatches = checkMatches(true); 
                 
                 if (!hasMatches) {
@@ -252,46 +239,55 @@
             }
         }
 
-        function shiftRow(rowNum, direction) {
-            let rowIndices = [];
-            for (let c = 0; c < GRID_SIZE; c++) {
-                rowIndices.push(rowNum * GRID_SIZE + c);
-            }
-            let rowValues = rowIndices.map(idx => grid[idx]);
+        function processPartialSlide(startIndex, step, axis) {
+            let row = Math.floor(startIndex / GRID_SIZE);
+            let col = startIndex % GRID_SIZE;
 
-            if (direction === 'right' && rowValues[GRID_SIZE - 1] === null) {
-                rowValues.pop();
-                rowValues.unshift(null);
-                rowIndices.forEach((gridIdx, i) => grid[gridIdx] = rowValues[i]);
-                return true;
-            } else if (direction === 'left' && rowValues[0] === null) {
-                rowValues.shift();
-                rowValues.push(null);
-                rowIndices.forEach((gridIdx, i) => grid[gridIdx] = rowValues[i]);
-                return true;
-            }
-            return false;
-        }
+            // 1. Gather all indices in front of the selected tile in swipe direction
+            let trackIndices = [];
+            let current = startIndex;
 
-        function shiftColumn(colNum, direction) {
-            let colIndices = [];
-            for (let r = 0; r < GRID_SIZE; r++) {
-                colIndices.push(r * GRID_SIZE + colNum);
+            while (true) {
+                current += step;
+                if (current < 0 || current >= GRID_SIZE * GRID_SIZE) break;
+                if (axis === 'horizontal' && Math.floor(current / GRID_SIZE) !== row) break;
+                trackIndices.push(current);
             }
-            let colValues = colIndices.map(idx => grid[idx]);
 
-            if (direction === 'down' && colValues[GRID_SIZE - 1] === null) {
-                colValues.pop();
-                colValues.unshift(null);
-                colIndices.forEach((gridIdx, i) => grid[gridIdx] = colValues[i]);
-                return true;
-            } else if (direction === 'up' && colValues[0] === null) {
-                colValues.shift();
-                colValues.push(null);
-                colIndices.forEach((gridIdx, i) => grid[gridIdx] = colValues[i]);
-                return true;
+            if (trackIndices.length === 0) return false;
+
+            // 2. Locate the contiguous group of solid tiles starting directly from our selection
+            let movingBlockIndices = [startIndex];
+            for (let idx of trackIndices) {
+                if (grid[idx] !== null) {
+                    movingBlockIndices.push(idx);
+                } else {
+                    break; // Met an empty slot, stop building the tile stack
+                }
             }
-            return false;
+
+            // 3. Count how many empty slots exist sequentially *after* our built block
+            let remainingTrack = trackIndices.slice(movingBlockIndices.length - 1);
+            let emptySpacesAhead = 0;
+            for (let idx of remainingTrack) {
+                if (grid[idx] === null) {
+                    emptySpacesAhead++;
+                } else {
+                    break; // Hit another stationary obstacle tile downstream
+                }
+            }
+
+            // If there is no open floor ahead to move into, the slide action is blocked
+            if (emptySpacesAhead === 0) return false;
+
+            // 4. Execute shifting layout modifications in reverse order to prevent overwriting values
+            let reverseBlock = [...movingBlockIndices].reverse();
+            reverseBlock.forEach(idx => {
+                grid[idx + (step * emptySpacesAhead)] = grid[idx];
+                grid[idx] = null;
+            });
+
+            return true;
         }
 
         function checkMatches(dryRun = false) {
@@ -304,7 +300,6 @@
                 let row = Math.floor(i / GRID_SIZE);
                 let col = i % GRID_SIZE;
 
-                // Compare text symbols rather than the raw object structures
                 if (col < GRID_SIZE - 1 && grid[i + 1] && grid[i].text === grid[i + 1].text) {
                     toRemove.add(i);
                     toRemove.add(i + 1);
@@ -317,9 +312,7 @@
                 }
             }
 
-            if (dryRun) {
-                return matched;
-            }
+            if (dryRun) return matched;
 
             toRemove.forEach(idx => {
                 grid[idx] = null;
