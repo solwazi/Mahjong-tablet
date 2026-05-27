@@ -241,54 +241,49 @@
             let row = Math.floor(startIndex / GRID_SIZE);
             let col = startIndex % GRID_SIZE;
 
-            let trackIndices = [];
+            // 1. Find all contiguous solid tiles starting from the swiped tile
+            let movingBlockIndices = [startIndex];
             let current = startIndex;
 
             while (true) {
                 current += step;
+                
+                // Stop if we hit the edge of the board layout
                 if (current < 0 || current >= GRID_SIZE * GRID_SIZE) break;
                 if (axis === 'horizontal' && Math.floor(current / GRID_SIZE) !== row) break;
-                trackIndices.push(current);
-            }
-
-            if (trackIndices.length === 0) return false;
-
-            let movingBlockIndices = [startIndex];
-            for (let idx of trackIndices) {
-                if (grid[idx] !== null) {
-                    movingBlockIndices.push(idx);
+                
+                // If there's an adjacent tile, add it to our pushed stack
+                if (grid[current] !== null) {
+                    movingBlockIndices.push(current);
                 } else {
                     break; 
                 }
             }
 
-            let remainingTrack = trackIndices.slice(movingBlockIndices.length - 1);
-            let emptySpacesAhead = 0;
-            for (let idx of remainingTrack) {
-                if (grid[idx] === null) {
-                    emptySpacesAhead++;
-                } else {
-                    break; 
-                }
-            }
+            // 2. Identify the target cell directly in front of the last tile in our block
+            let lastBlockIdx = movingBlockIndices[movingBlockIndices.length - 1];
+            let targetSpaceForLead = lastBlockIdx + step;
 
-            if (emptySpacesAhead === 0) return false;
+            // Strict check: Is the immediate next cell after our block completely empty and on the board?
+            if (targetSpaceForLead < 0 || targetSpaceForLead >= GRID_SIZE * GRID_SIZE) return false;
+            if (axis === 'horizontal' && Math.floor(targetSpaceForLead / GRID_SIZE) !== row) return false;
+            if (grid[targetSpaceForLead] !== null) return false; 
 
+            // 3. Perform the 1-unit shift moving backwards from the front of the block
             let reverseBlock = [...movingBlockIndices].reverse();
             reverseBlock.forEach(idx => {
-                grid[idx + (step * emptySpacesAhead)] = grid[idx];
+                grid[idx + step] = grid[idx];
                 grid[idx] = null;
             });
 
             return true;
         }
 
-        // Smart Line-of-Sight Matching Logic
         function checkMatches(dryRun = false) {
             let matched = false;
             let toRemove = new Set();
             
-            // 1. Scan Row by Row for Line-of-Sight matches
+            // Row Scan for Line-of-Sight
             for (let r = 0; r < GRID_SIZE; r++) {
                 let lastTileIdx = -1;
                 for (let c = 0; c < GRID_SIZE; c++) {
@@ -299,12 +294,12 @@
                             toRemove.add(lastTileIdx);
                             matched = true;
                         }
-                        lastTileIdx = currentIdx; // Update to the most recent solid tile found
+                        lastTileIdx = currentIdx;
                     }
                 }
             }
 
-            // 2. Scan Column by Column for Line-of-Sight matches
+            // Column Scan for Line-of-Sight
             for (let c = 0; c < GRID_SIZE; c++) {
                 let lastTileIdx = -1;
                 for (let r = 0; r < GRID_SIZE; r++) {
@@ -322,14 +317,12 @@
 
             if (dryRun) return matched;
 
-            // Remove matched twins
             toRemove.forEach(idx => {
                 grid[idx] = null;
             });
 
             if (matched) {
                 renderBoard();
-                // Cascade check in case clearing spaces opens up a new line of sight elsewhere
                 setTimeout(() => checkMatches(false), 150); 
             }
         }
