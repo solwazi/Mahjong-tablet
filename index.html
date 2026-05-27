@@ -80,23 +80,17 @@
             font-size: 1.8rem;
             color: var(--tile-text);
             box-shadow: 0 4px 0 var(--tile-shadow), 0 6px 10px rgba(0,0,0,0.15);
-            cursor: pointer;
-            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            transition: transform 0.15s ease-in-out;
             position: relative;
-            touch-action: none; /* Block browser panning while swiping tiles */
-        }
-
-        .tile.selected {
-            transform: scale(0.95);
-            background: #fef08a;
-            box-shadow: 0 2px 0 #fde047;
+            touch-action: none; 
         }
 
         .tile.empty {
             background-color: var(--empty-slot);
             border-radius: 6px;
-            opacity: 0.25;
+            opacity: 0.15;
             border: 1px dashed rgba(255,255,255,0.1);
+            box-shadow: none;
         }
 
         footer {
@@ -127,7 +121,7 @@
 <body>
 
     <header>
-        <h1>Slide Mahjong Daily</h1>
+        <h1>Shift Mahjong Daily</h1>
         <div id="score-board">Tiles Remaining: <span id="tile-count">24</span></div>
     </header>
 
@@ -145,15 +139,11 @@
         const SYMBOLS = ['🀀', '🀁', '🀂', '🀃', '🀄', '🀅', '🀆', '🀇', '🀏', '🀕', '🀟', '🀤'];
         
         let grid = [];
-        let selectedTile = null;
-
-        // Variables to keep track of swipe gestures
         let touchStartX = 0;
         let touchStartY = 0;
 
         function initGame() {
             grid = Array(GRID_SIZE * GRID_SIZE).fill(null);
-            selectedTile = null;
             
             let deck = [];
             SYMBOLS.forEach(sym => {
@@ -185,18 +175,11 @@
                     remaining++;
                     tileDiv.className = 'tile';
                     tileDiv.textContent = symbol;
-                    tileDiv.dataset.index = index;
                     
-                    // Add touch listeners for swipe tracking
-                    tileDiv.addEventListener('touchstart', (e) => handleTouchStart(e, index), { passive: true });
+                    tileDiv.addEventListener('touchstart', (e) => handleTouchStart(e), { passive: true });
                     tileDiv.addEventListener('touchend', (e) => handleTouchEnd(e, index), { passive: true });
-                    
-                    // Fallback tap handling
-                    tileDiv.addEventListener('click', () => handleTileTap(index));
                 } else {
                     tileDiv.className = 'tile empty';
-                    // Allow tapping an empty slot as an alternative destination
-                    tileDiv.addEventListener('click', () => handleEmptySpaceTap(index));
                 }
                 container.appendChild(tileDiv);
             });
@@ -207,129 +190,103 @@
             }
         }
 
-        // Capture starting coordinate of a swipe
-        function handleTouchStart(e, index) {
+        function handleTouchStart(e) {
             touchStartX = e.changedTouches[0].screenX;
             touchStartY = e.changedTouches[0].screenY;
-            selectedTile = index; 
         }
 
-        // Calculate swipe direction on lift
         function handleTouchEnd(e, index) {
             const deltaX = e.changedTouches[0].screenX - touchStartX;
             const deltaY = e.changedTouches[0].screenY - touchStartY;
-            
-            // Set a minimum threshold for swipe distance (in pixels)
             const swipeThreshold = 30; 
 
             if (Math.abs(deltaX) < swipeThreshold && Math.abs(deltaY) < swipeThreshold) {
-                return; // It was just a tap, handle separately
+                return; 
             }
 
-            let targetIndex = -1;
             let row = Math.floor(index / GRID_SIZE);
             let col = index % GRID_SIZE;
 
-            // Determine primary swipe vector (Horizontal vs Vertical)
+            // Take a backup snapshot of the board state before the shift happens
+            const boardSnapshot = [...grid];
+
+            let shifted = false;
             if (Math.abs(deltaX) > Math.abs(deltaY)) {
-                if (deltaX > 0) {
-                    // Swipe Right -> target the edge of the row
-                    targetIndex = (row * GRID_SIZE) + (GRID_SIZE - 1);
-                } else {
-                    // Swipe Left -> target the start of the row
-                    targetIndex = row * GRID_SIZE;
-                }
+                if (deltaX > 0) shifted = shiftRow(row, 'right');
+                else shifted = shiftRow(row, 'left');
             } else {
-                if (deltaY > 0) {
-                    // Swipe Down -> target the bottom edge of the column
-                    targetIndex = ((GRID_SIZE - 1) * GRID_SIZE) + col;
-                } else {
-                    // Swipe Up -> target the top edge of the column
-                    targetIndex = col;
-                }
+                if (deltaY > 0) shifted = shiftColumn(col, 'down');
+                else shifted = shiftColumn(col, 'up');
             }
 
-            if (targetIndex !== -1 && targetIndex !== index) {
-                if (attemptMove(index, targetIndex)) {
-                    selectedTile = null;
-                    checkMatches();
-                }
-            }
-        }
-
-        // Fallback tap control logic for simple combos
-        function handleTileTap(index) {
-            if (selectedTile !== null && selectedTile !== index) {
-                if (attemptMove(selectedTile, index)) {
-                    selectedTile = null;
-                    checkMatches();
-                    return;
-                }
-            }
-            selectedTile = index;
-            renderBoard();
-            const selectedEl = document.querySelector(`[data-index='${index}']`);
-            if (selectedEl) selectedEl.classList.add('selected');
-        }
-
-        function handleEmptySpaceTap(index) {
-            if (selectedTile !== null) {
-                if (attemptMove(selectedTile, index)) {
-                    selectedTile = null;
-                    checkMatches();
-                }
-            }
-        }
-
-        function attemptMove(fromIdx, toIdx) {
-            let fromRow = Math.floor(fromIdx / GRID_SIZE);
-            let fromCol = fromIdx % GRID_SIZE;
-            let toRow = Math.floor(toIdx / GRID_SIZE);
-            let toCol = toIdx % GRID_SIZE;
-
-            if (fromRow !== toRow && fromCol !== toCol) return false;
-
-            let step = 0;
-            if (fromRow === toRow) {
-                step = fromCol < toCol ? 1 : -1;
-            } else {
-                step = fromRow < toRow ? GRID_SIZE : -GRID_SIZE;
-            }
-
-            let current = fromIdx;
-            let targetSpot = fromIdx;
-
-            while (true) {
-                let next = current + step;
+            // If the row/col actually shifted space, evaluate if it produced matches
+            if (shifted) {
+                renderBoard();
                 
-                if (fromRow === toRow && Math.floor(next / GRID_SIZE) !== fromRow) break;
-                if (next < 0 || next >= GRID_SIZE * GRID_SIZE) break;
-
-                if (grid[next] !== null) {
-                    // If it hits an identical matching tile, wipe them out
-                    if (grid[next] === grid[fromIdx]) {
-                        grid[next] = null;
-                        grid[fromIdx] = null;
-                        return true;
-                    }
-                    break;
+                // Check if matches were generated by this layout move
+                let hasMatches = checkMatches(true); // run a dry test pass first
+                
+                if (!hasMatches) {
+                    // No match found! Revert back to original layout positions immediately
+                    setTimeout(() => {
+                        grid = boardSnapshot;
+                        renderBoard();
+                    }, 150);
+                } else {
+                    // Match found! Run full match elimination sequence
+                    setTimeout(() => {
+                        checkMatches(false);
+                    }, 100);
                 }
-
-                targetSpot = next;
-                current = next;
             }
+        }
 
-            if (targetSpot !== fromIdx) {
-                grid[targetSpot] = grid[fromIdx];
-                grid[fromIdx] = null;
+        function shiftRow(rowNum, direction) {
+            let rowIndices = [];
+            for (let c = 0; c < GRID_SIZE; c++) {
+                rowIndices.push(rowNum * GRID_SIZE + c);
+            }
+            let rowValues = rowIndices.map(idx => grid[idx]);
+
+            if (direction === 'right' && rowValues[GRID_SIZE - 1] === null) {
+                rowValues.pop();
+                rowValues.unshift(null);
+                rowIndices.forEach((gridIdx, i) => grid[gridIdx] = rowValues[i]);
+                return true;
+            } else if (direction === 'left' && rowValues[0] === null) {
+                rowValues.shift();
+                rowValues.push(null);
+                rowIndices.forEach((gridIdx, i) => grid[gridIdx] = rowValues[i]);
                 return true;
             }
-
             return false;
         }
 
-        function checkMatches() {
+        function shiftColumn(colNum, direction) {
+            let colIndices = [];
+            for (let r = 0; r < GRID_SIZE; r++) {
+                colIndices.push(r * GRID_SIZE + colNum);
+            }
+            let colValues = colIndices.map(idx => grid[idx]);
+
+            if (direction === 'down' && colValues[GRID_SIZE - 1] === null) {
+                colValues.pop();
+                colValues.unshift(null);
+                colIndices.forEach((gridIdx, i) => grid[gridIdx] = colValues[i]);
+                return true;
+            } else if (direction === 'up' && colValues[0] === null) {
+                colValues.shift();
+                colValues.push(null);
+                colIndices.forEach((gridIdx, i) => grid[gridIdx] = colValues[i]);
+                return true;
+            }
+            return false;
+        }
+
+        // Handles match detection. dryRun flag returns true/false without deleting anything.
+        function checkMatches(dryRun = false) {
             let matched = false;
+            let toRemove = new Set();
             
             for (let i = 0; i < grid.length; i++) {
                 if (!grid[i]) continue;
@@ -338,20 +295,30 @@
                 let col = i % GRID_SIZE;
 
                 if (col < GRID_SIZE - 1 && grid[i] === grid[i + 1]) {
-                    grid[i] = null;
-                    grid[i + 1] = null;
+                    toRemove.add(i);
+                    toRemove.add(i + 1);
                     matched = true;
                 }
                 if (row < GRID_SIZE - 1 && grid[i] === grid[i + GRID_SIZE]) {
-                    grid[i] = null;
-                    grid[i + GRID_SIZE] = null;
+                    toRemove.add(i);
+                    toRemove.add(i + GRID_SIZE);
                     matched = true;
                 }
             }
 
-            renderBoard();
+            if (dryRun) {
+                return matched;
+            }
+
+            // Real validation run: execute actual removals
+            toRemove.forEach(idx => {
+                grid[idx] = null;
+            });
+
             if (matched) {
-                setTimeout(checkMatches, 150);
+                renderBoard();
+                // Cascade checks in case falling fragments form secondary chain matches
+                setTimeout(() => checkMatches(false), 150); 
             }
         }
 
