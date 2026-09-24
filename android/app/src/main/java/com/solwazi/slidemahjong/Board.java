@@ -10,13 +10,15 @@ import java.util.Set;
 /**
  * UI-agnostic game logic for Daily Slide Mahjong.
  *
- * <p>Faithful port of the original HTML/JS game: a 6x6 board holding 24 tiles
- * (12 mahjong symbol pairs). A tile is dragged in one of the four directions;
- * the contiguous block of tiles ahead of it slides along, but the move is only
- * committed when the resulting board contains a line-of-sight match (two equal
- * symbols with no other tile between them in the same row or column, gaps
- * allowed). Matching pairs are removed automatically, chain reactions keep
- * clearing, and the board is reshuffled whenever no legal move remains.
+ * <p>A 6x6 board holding 24 tiles (12 mahjong symbol pairs). A tile is
+ * dragged in one of the four directions; the contiguous block of tiles ahead
+ * of it slides along, but the move is only committed when at least one of
+ * the moved tiles is part of a line-of-sight match (two equal symbols with
+ * no other tile between them in the same row or column, gaps allowed) on
+ * the resulting board. Sliding a tile merely out of the way so two untouched
+ * tiles match does not count. Matching pairs are removed automatically,
+ * chain reactions keep clearing, and the board is reshuffled whenever no
+ * legal move remains.
  *
  * <p>Operates on a {@code Tile[36]} array; has no Android dependencies so it
  * can be unit-tested on a plain JVM.
@@ -123,7 +125,7 @@ public class Board {
      * @param step               +1/-1 for horizontal, +GRID_SIZE/-GRID_SIZE for vertical
      * @param horizontal         true when sliding along a row
      * @param requestedDistance  cells requested by the drag length
-     * @return true when the move was committed (it produced a match)
+     * @return true when the move was committed (a moved tile landed in a match)
      */
     public boolean trySlide(int startIndex, int step, boolean horizontal, int requestedDistance) {
         if (startIndex < 0 || startIndex >= CELL_COUNT || cells[startIndex] == null) {
@@ -138,7 +140,7 @@ public class Board {
         // Try on a scratch copy first; the real board is only touched on success.
         Tile[] test = deepCopy(cells);
         applySlide(test, info.blockIndices, step, distance);
-        if (hasLineOfSightMatch(test)) {
+        if (movedBlockCreatesMatch(test, info.blockIndices, step, distance)) {
             System.arraycopy(test, 0, cells, 0, CELL_COUNT);
             return true;
         }
@@ -229,9 +231,67 @@ public class Board {
     }
 
     /**
+     * Gathers every line-of-sight pair on the given board into a set of
+     * cell indices. Does not mutate the board.
+     */
+    public static Set<Integer> collectMatches(Tile[] board) {
+        Set<Integer> toRemove = new HashSet<>();
+
+        for (int r = 0; r < GRID_SIZE; r++) {
+            int lastTileIndex = -1;
+            for (int c = 0; c < GRID_SIZE; c++) {
+                int index = r * GRID_SIZE + c;
+                if (board[index] != null) {
+                    if (lastTileIndex != -1
+                            && board[index].symbol.equals(board[lastTileIndex].symbol)) {
+                        toRemove.add(index);
+                        toRemove.add(lastTileIndex);
+                    }
+                    lastTileIndex = index;
+                }
+            }
+        }
+        for (int c = 0; c < GRID_SIZE; c++) {
+            int lastTileIndex = -1;
+            for (int r = 0; r < GRID_SIZE; r++) {
+                int index = r * GRID_SIZE + c;
+                if (board[index] != null) {
+                    if (lastTileIndex != -1
+                            && board[index].symbol.equals(board[lastTileIndex].symbol)) {
+                        toRemove.add(index);
+                        toRemove.add(lastTileIndex);
+                    }
+                    lastTileIndex = index;
+                }
+            }
+        }
+
+        return toRemove;
+    }
+
+    /**
+     * Strict legality check: after sliding {@code blockIndices} by
+     * {@code distance} on {@code test}, is at least one of the moved
+     * tiles (at its new position) part of a line-of-sight match?
+     * Merely uncovering a match between untouched tiles does not count.
+     */
+    public static boolean movedBlockCreatesMatch(Tile[] test,
+                                                 List<Integer> blockIndices,
+                                                 int step, int distance) {
+        Set<Integer> matches = collectMatches(test);
+        for (int index : blockIndices) {
+            if (matches.contains(index + step * distance)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Finds one tile whose block can slide some distance, in some direction,
-     * to produce a match — exactly the kind of move a drag is allowed to make.
-     * Returns null when no such move exists anywhere on the board.
+     * to put a moved tile into a match — exactly the kind of move a drag is
+     * allowed to make. Returns null when no such move exists anywhere on
+     * the board.
      */
     public Hint findHint() {
         int[][] directions = {
@@ -249,7 +309,7 @@ public class Board {
                 for (int distance = 1; distance <= info.maxDistance; distance++) {
                     Tile[] test = deepCopy(cells);
                     applySlide(test, info.blockIndices, step, distance);
-                    if (hasLineOfSightMatch(test)) {
+                    if (movedBlockCreatesMatch(test, info.blockIndices, step, distance)) {
                         return new Hint(new ArrayList<>(info.blockIndices), step, distance);
                     }
                 }
@@ -265,44 +325,14 @@ public class Board {
      *         again after a short delay for chain reactions)
      */
     public boolean checkMatches() {
-        Set<Integer> toRemove = new HashSet<>();
-
-        for (int r = 0; r < GRID_SIZE; r++) {
-            int lastTileIndex = -1;
-            for (int c = 0; c < GRID_SIZE; c++) {
-                int index = r * GRID_SIZE + c;
-                if (cells[index] != null) {
-                    if (lastTileIndex != -1
-                            && cells[index].symbol.equals(cells[lastTileIndex].symbol)) {
-                        toRemove.add(index);
-                        toRemove.add(lastTileIndex);
-                    }
-                    lastTileIndex = index;
-                }
-            }
-        }
-        for (int c = 0; c < GRID_SIZE; c++) {
-            int lastTileIndex = -1;
-            for (int r = 0; r < GRID_SIZE; r++) {
-                int index = r * GRID_SIZE + c;
-                if (cells[index] != null) {
-                    if (lastTileIndex != -1
-                            && cells[index].symbol.equals(cells[lastTileIndex].symbol)) {
-                        toRemove.add(index);
-                        toRemove.add(lastTileIndex);
-                    }
-                    lastTileIndex = index;
-                }
-            }
-        }
+        Set<Integer> toRemove = collectMatches(cells);
 
         boolean matched = !toRemove.isEmpty();
         for (int index : toRemove) {
             cells[index] = null;
         }
 
-        if (!matched && remainingTiles() > 0
-                && !hasLineOfSightMatch(cells) && findHint() == null) {
+        if (!matched && remainingTiles() > 0 && findHint() == null) {
             // No more matches to clear and no legal move left: reshuffle so
             // the player is never stuck.
             ensureSolvable();
@@ -311,14 +341,13 @@ public class Board {
     }
 
     /**
-     * Guarantees the board never has zero legal moves: while there is no
-     * line-of-sight match and no hint move, the tiles are redistributed
+     * Guarantees the board never has zero legal moves: while no slide can
+     * put a moved tile into a match, the tiles are redistributed
      * (up to 500 attempts).
      */
     public void ensureSolvable() {
         int attempts = 0;
-        while (!hasLineOfSightMatch(cells) && findHint() == null
-                && attempts < MAX_SOLVE_ATTEMPTS) {
+        while (findHint() == null && attempts < MAX_SOLVE_ATTEMPTS) {
             shufflePositionsInPlace();
             attempts++;
         }
