@@ -293,7 +293,7 @@ public class BoardPanel extends JPanel implements MouseListener {
                     "🎉 Board Cleared! Nice job!",
                     "Shift Mahjong Daily",
                     JOptionPane.INFORMATION_MESSAGE);
-        } else if (!board.hasLineOfSightMatch() && board.findHint() == null) {
+        } else if (board.findHint() == null) {
             board.ensureSolvable();
             notifyCount();
             repaint();

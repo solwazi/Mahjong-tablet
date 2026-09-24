@@ -12,9 +12,10 @@ import java.util.Set;
  * UI-agnostic game logic for Shift Mahjong Daily.
  *
  * <p>The board is a flat {@code Tile[36]} array, index = row * 6 + col.
- * A move is always simulated on a copy of the board first and only
- * committed when the resulting board contains a line-of-sight match,
- * exactly like the original HTML/JS version.</p>
+ * A move is always simulated on a copy of the board first and is only
+ * committed when at least one of the moved tiles is part of a
+ * line-of-sight match on the resulting board. Sliding a tile merely
+ * out of the way so two untouched tiles match does not count.</p>
  */
 public class Board {
 
@@ -156,8 +157,22 @@ public class Board {
     }
 
     /**
+     * Slides the block on {@code targetGrid} by {@code distance} cells,
+     * moving the block far-end-first so tiles don't overwrite each other.
+     * The caller must ensure the distance fits the available open space.
+     */
+    public static void applySlide(Tile[] targetGrid, List<Integer> blockIndices,
+                                  int step, int distance) {
+        List<Integer> reverseBlock = new ArrayList<>(blockIndices);
+        Collections.reverse(reverseBlock);
+        for (int idx : reverseBlock) {
+            targetGrid[idx + step * distance] = targetGrid[idx];
+            targetGrid[idx] = null;
+        }
+    }
+
+    /**
      * Slides the block on {@code targetGrid}, capped by open space.
-     * Moves the block far-end-first so tiles don't overwrite each other.
      * Returns false when nothing can move.
      */
     public boolean processPartialSlide(Tile[] targetGrid, int startIndex, int step,
@@ -167,27 +182,27 @@ public class Board {
         if (distance == 0) {
             return false;
         }
-
-        List<Integer> reverseBlock = new ArrayList<>(info.blockIndices);
-        Collections.reverse(reverseBlock);
-        for (int idx : reverseBlock) {
-            targetGrid[idx + step * distance] = targetGrid[idx];
-            targetGrid[idx] = null;
-        }
+        applySlide(targetGrid, info.blockIndices, step, distance);
         return true;
     }
 
     /**
      * Attempts a slide on the real board. The move is simulated on a copy
-     * and committed only if the result contains a line-of-sight match.
+     * and committed only if at least one moved tile is part of a
+     * line-of-sight match on the resulting board.
      */
     public boolean attemptSlide(int startIndex, int step, Axis axis, int requestedDistance) {
         if (startIndex < 0 || startIndex >= CELL_COUNT || grid[startIndex] == null) {
             return false;
         }
+        SlideInfo info = getSlideInfo(grid, startIndex, step, axis);
+        int distance = Math.min(requestedDistance, info.maxDistance);
+        if (distance == 0) {
+            return false;
+        }
         Tile[] testGrid = copyGrid(grid);
-        boolean moved = processPartialSlide(testGrid, startIndex, step, axis, requestedDistance);
-        if (moved && hasLineOfSightMatch(testGrid)) {
+        applySlide(testGrid, info.blockIndices, step, distance);
+        if (movedBlockCreatesMatch(testGrid, info.blockIndices, step, distance)) {
             grid = testGrid;
             return true;
         }
@@ -240,14 +255,23 @@ public class Board {
      * Does not mutate the board.
      */
     public Set<Integer> collectMatches() {
+        return collectMatches(grid);
+    }
+
+    /**
+     * Gathers every line-of-sight pair on the given board into a removal
+     * set. Does not mutate the board.
+     */
+    public static Set<Integer> collectMatches(Tile[] targetGrid) {
         Set<Integer> toRemove = new LinkedHashSet<>();
 
         for (int r = 0; r < GRID_SIZE; r++) {
             int lastTileIdx = -1;
             for (int c = 0; c < GRID_SIZE; c++) {
                 int idx = r * GRID_SIZE + c;
-                if (grid[idx] != null) {
-                    if (lastTileIdx != -1 && grid[idx].symbol.equals(grid[lastTileIdx].symbol)) {
+                if (targetGrid[idx] != null) {
+                    if (lastTileIdx != -1
+                            && targetGrid[idx].symbol.equals(targetGrid[lastTileIdx].symbol)) {
                         toRemove.add(idx);
                         toRemove.add(lastTileIdx);
                     }
@@ -260,8 +284,9 @@ public class Board {
             int lastTileIdx = -1;
             for (int r = 0; r < GRID_SIZE; r++) {
                 int idx = r * GRID_SIZE + c;
-                if (grid[idx] != null) {
-                    if (lastTileIdx != -1 && grid[idx].symbol.equals(grid[lastTileIdx].symbol)) {
+                if (targetGrid[idx] != null) {
+                    if (lastTileIdx != -1
+                            && targetGrid[idx].symbol.equals(targetGrid[lastTileIdx].symbol)) {
                         toRemove.add(idx);
                         toRemove.add(lastTileIdx);
                     }
@@ -271,6 +296,24 @@ public class Board {
         }
 
         return toRemove;
+    }
+
+    /**
+     * Strict legality check: after sliding {@code blockIndices} by
+     * {@code distance} on {@code testGrid}, is at least one of the moved
+     * tiles (at its new position) part of a line-of-sight match?
+     * Merely uncovering a match between untouched tiles does not count.
+     */
+    public static boolean movedBlockCreatesMatch(Tile[] testGrid,
+                                                 List<Integer> blockIndices,
+                                                 int step, int distance) {
+        Set<Integer> matches = collectMatches(testGrid);
+        for (int idx : blockIndices) {
+            if (matches.contains(idx + step * distance)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Removes the given cells from the live board. */
@@ -302,13 +345,8 @@ public class Board {
                 SlideInfo info = getSlideInfo(grid, index, step, axis);
                 for (int distance = 1; distance <= info.maxDistance; distance++) {
                     Tile[] testGrid = copyGrid(grid);
-                    List<Integer> reverseBlock = new ArrayList<>(info.blockIndices);
-                    Collections.reverse(reverseBlock);
-                    for (int idx : reverseBlock) {
-                        testGrid[idx + step * distance] = testGrid[idx];
-                        testGrid[idx] = null;
-                    }
-                    if (hasLineOfSightMatch(testGrid)) {
+                    applySlide(testGrid, info.blockIndices, step, distance);
+                    if (movedBlockCreatesMatch(testGrid, info.blockIndices, step, distance)) {
                         return new Hint(info.blockIndices, step, distance);
                     }
                 }
@@ -347,7 +385,7 @@ public class Board {
 
     /**
      * Guarantees the board is never left with zero legal moves: reshuffles
-     * until a match is in line of sight or some move can create one.
+     * until at least one slide can put a moved tile into a match.
      */
     public void ensureSolvable() {
         ensureSolvable(500);
@@ -355,7 +393,7 @@ public class Board {
 
     public void ensureSolvable(int maxAttempts) {
         int attempts = 0;
-        while (!hasLineOfSightMatch(grid) && findHint() == null && attempts < maxAttempts) {
+        while (findHint() == null && attempts < maxAttempts) {
             shuffleTilesInPlace();
             attempts++;
         }
