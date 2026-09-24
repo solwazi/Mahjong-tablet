@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark theme colors, matching the original web game. -->
+    <color name="background">#1E293B</color>
+    <color name="board">#0F172A</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="accent">#3B82F6</color>
+    <color name="hint">#FBBF24</color>
+</resources>
