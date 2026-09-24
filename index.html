@@ -90,6 +90,23 @@
             box-shadow: none;
         }
 
+        @keyframes hint-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+
+        .tile.hint-source {
+            animation: hint-pulse 0.6s ease-in-out infinite;
+            outline: 3px solid #fbbf24;
+            outline-offset: -3px;
+        }
+
+        .tile.empty.hint-target {
+            opacity: 0.6;
+            border: 2px dashed #fbbf24;
+            background-color: rgba(251, 191, 36, 0.25);
+        }
+
         footer {
             width: 100%;
             display: flex;
@@ -126,6 +143,7 @@
 
     <footer>
         <button onclick="initGame()">New Board</button>
+        <button onclick="showHint()">Hint</button>
     </footer>
 
     <script>
@@ -166,6 +184,7 @@
                 grid[pos] = deck[index];
             });
 
+            ensureSolvable();
             renderBoard();
         }
 
@@ -209,74 +228,213 @@
                 return; 
             }
 
-            const boardSnapshot = grid.map(item => item ? { ...item } : null);
+            // Figure out how many grid cells the swipe actually covered, so a
+            // longer swipe moves a block further (not just one square).
+            const firstTile = container.firstElementChild;
+            const tileRect = firstTile.getBoundingClientRect();
+            const gridGap = 6; // matches the #game-container gap in the CSS
+            const cellPitch = tileRect.width + gridGap;
+
+            // Try the move on a scratch copy of the board first — nothing touches
+            // the real board yet.
+            const testGrid = grid.map(item => item ? { ...item } : null);
             let moved = false;
 
             if (Math.abs(deltaX) > Math.abs(deltaY)) {
                 const direction = deltaX > 0 ? 1 : -1;
-                moved = processPartialSlide(index, direction, 'horizontal');
+                const requestedDistance = Math.max(1, Math.round(Math.abs(deltaX) / cellPitch));
+                moved = processPartialSlide(testGrid, index, direction, 'horizontal', requestedDistance);
             } else {
                 const direction = deltaY > 0 ? GRID_SIZE : -GRID_SIZE;
-                moved = processPartialSlide(index, direction, 'vertical');
+                const requestedDistance = Math.max(1, Math.round(Math.abs(deltaY) / cellPitch));
+                moved = processPartialSlide(testGrid, index, direction, 'vertical', requestedDistance);
             }
 
-            if (moved) {
+            // Only commit the move if it actually results in a match. If it
+            // doesn't, the real board is never touched — no flicker, no snapback,
+            // the tile simply doesn't move.
+            if (moved && hasLineOfSightMatch(testGrid)) {
+                grid = testGrid;
                 renderBoard();
-                let hasMatches = checkMatches(true); 
-                
-                if (!hasMatches) {
-                    setTimeout(() => {
-                        grid = boardSnapshot;
-                        renderBoard();
-                    }, 150);
-                } else {
-                    setTimeout(() => {
-                        checkMatches(false);
-                    }, 100);
-                }
+                setTimeout(() => {
+                    checkMatches(false);
+                }, 100);
             }
         }
 
-        function processPartialSlide(startIndex, step, axis) {
+        // Shared by processPartialSlide and the hint finder. For a tile at
+        // startIndex, returns the contiguous block of tiles that would move
+        // together (movingBlockIndices) and how many open squares are ahead of
+        // that block before it's blocked by another tile or the edge (maxDistance).
+        function getSlideInfo(targetGrid, startIndex, step, axis) {
             let row = Math.floor(startIndex / GRID_SIZE);
-            let col = startIndex % GRID_SIZE;
 
-            // 1. Find all contiguous solid tiles starting from the swiped tile
             let movingBlockIndices = [startIndex];
             let current = startIndex;
 
             while (true) {
                 current += step;
-                
-                // Stop if we hit the edge of the board layout
                 if (current < 0 || current >= GRID_SIZE * GRID_SIZE) break;
                 if (axis === 'horizontal' && Math.floor(current / GRID_SIZE) !== row) break;
-                
-                // If there's an adjacent tile, add it to our pushed stack
-                if (grid[current] !== null) {
+                if (targetGrid[current] !== null) {
                     movingBlockIndices.push(current);
                 } else {
-                    break; 
+                    break;
                 }
             }
 
-            // 2. Identify the target cell directly in front of the last tile in our block
             let lastBlockIdx = movingBlockIndices[movingBlockIndices.length - 1];
-            let targetSpaceForLead = lastBlockIdx + step;
+            let maxDistance = 0;
+            let cursor = lastBlockIdx + step;
 
-            // Strict check: Is the immediate next cell after our block completely empty and on the board?
-            if (targetSpaceForLead < 0 || targetSpaceForLead >= GRID_SIZE * GRID_SIZE) return false;
-            if (axis === 'horizontal' && Math.floor(targetSpaceForLead / GRID_SIZE) !== row) return false;
-            if (grid[targetSpaceForLead] !== null) return false; 
+            while (
+                cursor >= 0 && cursor < GRID_SIZE * GRID_SIZE &&
+                !(axis === 'horizontal' && Math.floor(cursor / GRID_SIZE) !== row) &&
+                targetGrid[cursor] === null
+            ) {
+                maxDistance++;
+                cursor += step;
+            }
 
-            // 3. Perform the 1-unit shift moving backwards from the front of the block
+            return { movingBlockIndices, maxDistance };
+        }
+
+        function processPartialSlide(targetGrid, startIndex, step, axis, requestedDistance) {
+            const { movingBlockIndices, maxDistance } = getSlideInfo(targetGrid, startIndex, step, axis);
+            const distance = Math.min(requestedDistance, maxDistance);
+            if (distance === 0) return false;
+
             let reverseBlock = [...movingBlockIndices].reverse();
             reverseBlock.forEach(idx => {
-                grid[idx + step] = grid[idx];
-                grid[idx] = null;
+                targetGrid[idx + step * distance] = targetGrid[idx];
+                targetGrid[idx] = null;
             });
 
             return true;
+        }
+
+        // Read-only check: does this board (row/column line-of-sight, gaps allowed)
+        // contain a matching pair anywhere? Used to validate a move before it's
+        // committed to the real board.
+        function hasLineOfSightMatch(targetGrid) {
+            for (let r = 0; r < GRID_SIZE; r++) {
+                let lastTileIdx = -1;
+                for (let c = 0; c < GRID_SIZE; c++) {
+                    let currentIdx = r * GRID_SIZE + c;
+                    if (targetGrid[currentIdx] !== null) {
+                        if (lastTileIdx !== -1 && targetGrid[currentIdx].text === targetGrid[lastTileIdx].text) {
+                            return true;
+                        }
+                        lastTileIdx = currentIdx;
+                    }
+                }
+            }
+
+            for (let c = 0; c < GRID_SIZE; c++) {
+                let lastTileIdx = -1;
+                for (let r = 0; r < GRID_SIZE; r++) {
+                    let currentIdx = r * GRID_SIZE + c;
+                    if (targetGrid[currentIdx] !== null) {
+                        if (lastTileIdx !== -1 && targetGrid[currentIdx].text === targetGrid[lastTileIdx].text) {
+                            return true;
+                        }
+                        lastTileIdx = currentIdx;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Looks for one tile whose block can slide some distance, in some
+        // direction, to produce a match — exactly the kind of move a swipe is
+        // allowed to make. Returns null if no such move exists anywhere on the
+        // board.
+        function findHint() {
+            const directions = [
+                { step: 1, axis: 'horizontal' },
+                { step: -1, axis: 'horizontal' },
+                { step: GRID_SIZE, axis: 'vertical' },
+                { step: -GRID_SIZE, axis: 'vertical' }
+            ];
+
+            for (let index = 0; index < grid.length; index++) {
+                if (grid[index] === null) continue;
+
+                for (const { step, axis } of directions) {
+                    const { movingBlockIndices, maxDistance } = getSlideInfo(grid, index, step, axis);
+
+                    for (let distance = 1; distance <= maxDistance; distance++) {
+                        const testGrid = grid.map(t => t ? { ...t } : null);
+                        const reverseBlock = [...movingBlockIndices].reverse();
+                        reverseBlock.forEach(idx => {
+                            testGrid[idx + step * distance] = testGrid[idx];
+                            testGrid[idx] = null;
+                        });
+
+                        if (hasLineOfSightMatch(testGrid)) {
+                            return { blockIndices: movingBlockIndices, step, distance };
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        // Randomly redistributes the tiles currently on the board across all 36
+        // squares (their values are kept, only their positions change).
+        function shuffleTilesInPlace() {
+            const tileValues = grid.filter(t => t !== null);
+            let positions = Array.from({ length: GRID_SIZE * GRID_SIZE }, (_, i) => i);
+
+            for (let i = positions.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [positions[i], positions[j]] = [positions[j], positions[i]];
+            }
+
+            const newGrid = Array(GRID_SIZE * GRID_SIZE).fill(null);
+            tileValues.forEach((tileData, i) => {
+                newGrid[positions[i]] = tileData;
+            });
+
+            grid = newGrid;
+        }
+
+        // Guarantees the board is never left with zero legal moves: if there's
+        // already a match sitting in line of sight, or some move can create one,
+        // it's fine as-is. Otherwise the tiles get reshuffled (repeatedly, if
+        // needed) until a move is possible again.
+        function ensureSolvable(maxAttempts = 500) {
+            let attempts = 0;
+            while (!hasLineOfSightMatch(grid) && findHint() === null && attempts < maxAttempts) {
+                shuffleTilesInPlace();
+                attempts++;
+            }
+        }
+
+        function showHint() {
+            const hint = findHint();
+
+            if (!hint) {
+                // Shouldn't normally happen since the board is kept solvable, but
+                // reshuffle as a safety net just in case.
+                shuffleTilesInPlace();
+                ensureSolvable();
+                renderBoard();
+                return;
+            }
+
+            const cells = container.children;
+            const destinationIndices = hint.blockIndices.map(idx => idx + hint.step * hint.distance);
+
+            hint.blockIndices.forEach(idx => cells[idx] && cells[idx].classList.add('hint-source'));
+            destinationIndices.forEach(idx => cells[idx] && cells[idx].classList.add('hint-target'));
+
+            setTimeout(() => {
+                hint.blockIndices.forEach(idx => cells[idx] && cells[idx].classList.remove('hint-source'));
+                destinationIndices.forEach(idx => cells[idx] && cells[idx].classList.remove('hint-target'));
+            }, 1500);
         }
 
         function checkMatches(dryRun = false) {
@@ -324,6 +482,14 @@
             if (matched) {
                 renderBoard();
                 setTimeout(() => checkMatches(false), 150); 
+            } else if (grid.some(t => t !== null)) {
+                // No more chain-reaction matches to clear. Make sure the player
+                // still has at least one legal move; reshuffle in place if not.
+                const hadNoMoves = !hasLineOfSightMatch(grid) && findHint() === null;
+                if (hadNoMoves) {
+                    ensureSolvable();
+                    renderBoard();
+                }
             }
         }
 
