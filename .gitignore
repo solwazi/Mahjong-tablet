@@ -1,0 +1,17 @@
+#Intellij / Android Studio
+.idea/
+*.iml
+
+#Gradle build outputs
+.gradle/
+build/
+
+#Machine-specific SDK path
+local.properties
+
+#Clutter at repo root
+gh-install.msi
+github-client.sh
+stdout
+
+

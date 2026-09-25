@@ -64,7 +64,6 @@ public class BoardView extends View {
     private float downX;
     private float downY;
     private int downIndex = -1;
-    private boolean dragHandled;
 
     // Active hint highlight.
     private Board.Hint activeHint;
@@ -265,24 +264,26 @@ public class BoardView extends View {
                     downX = event.getX();
                     downY = event.getY();
                     downIndex = index;
-                    dragHandled = false;
                     return true;
                 }
                 return false;
             }
-            case MotionEvent.ACTION_MOVE:
             case MotionEvent.ACTION_UP: {
-                if (downIndex < 0 || dragHandled) {
+                // Commit on release using the total drag distance, like the
+                // original game and the Swing version: a longer drag moves
+                // the block further instead of always moving a single cell.
+                if (downIndex < 0) {
                     break;
                 }
+                int startIndex = downIndex;
+                downIndex = -1;
                 float dx = event.getX() - downX;
                 float dy = event.getY() - downY;
                 float absDx = Math.abs(dx);
                 float absDy = Math.abs(dy);
                 if (Math.max(absDx, absDy) < touchSlopPx) {
-                    break;
+                    break; // treated as a tap, not a drag
                 }
-                dragHandled = true;
                 boolean horizontal = absDx > absDy;
                 int step;
                 if (horizontal) {
@@ -292,15 +293,13 @@ public class BoardView extends View {
                 }
                 float dragPx = horizontal ? absDx : absDy;
                 int requestedDistance = Math.max(1, Math.round(dragPx / cellPitch));
-                if (board.trySlide(downIndex, step, horizontal, requestedDistance)) {
+                if (board.trySlide(startIndex, step, horizontal, requestedDistance)) {
                     afterMove();
                 }
-                downIndex = -1;
                 break;
             }
             case MotionEvent.ACTION_CANCEL:
                 downIndex = -1;
-                dragHandled = false;
                 break;
         }
         return true;
