@@ -11,6 +11,7 @@ import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.Toast;
 
 import java.util.List;
 
@@ -31,8 +32,14 @@ public class BoardView extends View {
     }
 
     private static final long HINT_DURATION_MS = 1500;
-    private static final long MATCH_CHAIN_DELAY_MS = 150;
+    // Beat after a slide lands before the first matches clear, so the
+    // player can see what matched.
+    private static final long FIRST_CLEAR_DELAY_MS = 500;
+    // Pause between chain-reaction clear waves.
+    private static final long MATCH_CHAIN_DELAY_MS = 650;
     private static final long WIN_DIALOG_DELAY_MS = 300;
+    // How long the "shuffling" notice stays up before the reshuffle happens.
+    private static final long RESHUFFLE_NOTICE_DELAY_MS = 1600;
     private static final float DRAG_THRESHOLD_DP = 30f;
 
     private Board board;
@@ -72,6 +79,33 @@ public class BoardView extends View {
         public void run() {
             activeHint = null;
             invalidate();
+        }
+    };
+
+    // True while a "shuffling the board" notice is on screen; guards
+    // against scheduling the reshuffle twice.
+    private boolean reshufflePending = false;
+    private final Runnable reshuffleRunnable = new Runnable() {
+        @Override
+        public void run() {
+            reshufflePending = false;
+            if (board == null) {
+                return;
+            }
+            board.reshuffle();
+            afterBoardChanged();
+        }
+    };
+    private final Runnable firstClearRunnable = new Runnable() {
+        @Override
+        public void run() {
+            firstClear();
+        }
+    };
+    private final Runnable chainCheckRunnable = new Runnable() {
+        @Override
+        public void run() {
+            chainCheck();
         }
     };
 
@@ -141,20 +175,23 @@ public class BoardView extends View {
             return;
         }
         handler.removeCallbacks(clearHintRunnable);
+        handler.removeCallbacks(firstClearRunnable);
+        handler.removeCallbacks(chainCheckRunnable);
+        handler.removeCallbacks(reshuffleRunnable);
+        reshufflePending = false;
         activeHint = null;
         board.newBoard();
         afterBoardChanged();
     }
 
-    /** Highlights one legal move, or reshuffles if none exists (safety net). */
+    /** Highlights one legal move, or reshuffles (with notice) if none exists. */
     public void showHint() {
         if (board == null) {
             return;
         }
         Board.Hint hint = board.findHint();
         if (hint == null) {
-            board.reshuffle();
-            afterBoardChanged();
+            notifyReshuffling();
             return;
         }
         activeHint = hint;
@@ -312,27 +349,61 @@ public class BoardView extends View {
         }
     }
 
-    /** Runs after a committed slide: clears matches, then chain-clears. */
+    /** Runs after a committed slide: pauses, then clears matches in waves. */
     private void afterMove() {
         handler.removeCallbacks(clearHintRunnable);
         activeHint = null;
+        // Let the player see the landed tiles before anything vanishes.
+        handler.postDelayed(firstClearRunnable, FIRST_CLEAR_DELAY_MS);
+    }
+
+    private void firstClear() {
+        if (board == null) {
+            return;
+        }
         boolean matched = board.checkMatches();
         afterBoardChanged();
         if (matched) {
-            handler.postDelayed(this::chainCheck, MATCH_CHAIN_DELAY_MS);
+            handler.postDelayed(chainCheckRunnable, MATCH_CHAIN_DELAY_MS);
+        } else {
+            afterClearsSettled();
+        }
+    }
+
+    private void chainCheck() {
+        if (board == null) {
+            return;
+        }
+        boolean matched = board.checkMatches();
+        afterBoardChanged();
+        if (matched) {
+            handler.postDelayed(chainCheckRunnable, MATCH_CHAIN_DELAY_MS);
+        } else {
+            afterClearsSettled();
+        }
+    }
+
+    /** Called once all match waves are done: reshuffle with notice when stuck. */
+    private void afterClearsSettled() {
+        if (board.remainingTiles() > 0 && board.findHint() == null) {
+            notifyReshuffling();
         } else {
             checkWin();
         }
     }
 
-    private void chainCheck() {
-        boolean matched = board.checkMatches();
-        afterBoardChanged();
-        if (matched) {
-            handler.postDelayed(this::chainCheck, MATCH_CHAIN_DELAY_MS);
-        } else {
-            checkWin();
+    /**
+     * Shows a "shuffling the board" notice, pauses, then reshuffles.
+     * Used instead of reshuffling silently when no legal move remains.
+     */
+    private void notifyReshuffling() {
+        if (reshufflePending || board == null) {
+            return;
         }
+        reshufflePending = true;
+        Toast.makeText(getContext(), "No moves left \u2014 shuffling the board\u2026",
+                Toast.LENGTH_LONG).show();
+        handler.postDelayed(reshuffleRunnable, RESHUFFLE_NOTICE_DELAY_MS);
     }
 
     private void checkWin() {

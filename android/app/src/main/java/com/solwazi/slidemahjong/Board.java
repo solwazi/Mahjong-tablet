@@ -321,6 +321,9 @@ public class Board {
     /**
      * Removes every line-of-sight pair on the board.
      *
+     * <p>Never reshuffles on its own: when no legal move remains, the caller
+     * (the UI) is responsible for telling the player and reshuffling.
+     *
      * @return true when at least one pair was removed (caller should check
      *         again after a short delay for chain reactions)
      */
@@ -330,12 +333,6 @@ public class Board {
         boolean matched = !toRemove.isEmpty();
         for (int index : toRemove) {
             cells[index] = null;
-        }
-
-        if (!matched && remainingTiles() > 0 && findHint() == null) {
-            // No more matches to clear and no legal move left: reshuffle so
-            // the player is never stuck.
-            ensureSolvable();
         }
         return matched;
     }
