@@ -13,5 +13,5 @@ local.properties
 gh-install.msi
 github-client.sh
 stdout
-
+out/
 
